@@ -29,7 +29,16 @@ from PIL import Image
 from .languages import STATION, Drawable, Namer, english_name, station_locale
 from .names import drawable_keys, image_for, normalize, perches_for, resolve
 from .render import fonts
-from .render.collage import KEY_LIMIT, NO_LIMIT, gather_entries, render_collage, selected_species
+from .render.collage import (
+    KEY_LIMIT,
+    NO_BIRDS,
+    NO_LIMIT,
+    Birds,
+    draw_collage,
+    gather_entries,
+    selected_species,
+    whole_page,
+)
 from .render.page import NEW, Edges, day_ordinal
 from .render.plate import effective_margin, render_plate
 from .source import Source, Species
@@ -118,7 +127,8 @@ def _key_limit(limit: int) -> int:
 @dataclass(frozen=True)
 class Mode:
     label: str
-    render: Callable[[Context], Image.Image]
+    # The page, and where its birds are on it for the kiosk's taps.
+    draw: Callable[[Context], tuple[Image.Image, Birds]]
     key: Callable[[Context], tuple]
     # The species this page is about, for the admin listing.
     subjects: Callable[[Context], list[str]]
@@ -218,9 +228,9 @@ def _collage_key(ctx: Context) -> tuple:
     return (species, spotlit if spotlit in species else None)
 
 
-def _collage(ctx: Context) -> Image.Image:
+def _collage(ctx: Context) -> tuple[Image.Image, Birds]:
     spotlit = _spotlit(ctx)
-    return render_collage(
+    return draw_collage(
         gather_entries(
             ctx.source,
             ctx.images_dir,
@@ -270,12 +280,12 @@ def _latest_key(ctx: Context) -> tuple:
     return _holder(ctx) or ()
 
 
-def _latest_page(ctx: Context) -> Image.Image:
+def _latest_page(ctx: Context) -> tuple[Image.Image, Birds]:
     holder = _holder(ctx)
     if holder is None:
-        return _plate(ctx, None)
+        return _plate(ctx, None), NO_BIRDS
     name, since = holder
-    return _plate(ctx, name, ctx.namer.moment(since, _drawable(ctx)))
+    return _plate(ctx, name, ctx.namer.moment(since, _drawable(ctx))), whole_page(name)
 
 
 def _arrival(ctx: Context) -> Species | None:
@@ -294,13 +304,14 @@ def _arrival_key(ctx: Context) -> tuple:
     return (species.scientific_name, species.first_seen.astimezone().date())
 
 
-def _arrival_page(ctx: Context) -> Image.Image:
+def _arrival_page(ctx: Context) -> tuple[Image.Image, Birds]:
     species = _arrival(ctx)
     if species is None:
-        return _plate(ctx, None)
+        return _plate(ctx, None), NO_BIRDS
     # The year stands in for "first heard": only names get translated, and this
     # one can be months old.
-    return _plate(ctx, species.scientific_name, ctx.namer.date(species.first_seen, _drawable(ctx)))
+    note = ctx.namer.date(species.first_seen, _drawable(ctx))
+    return _plate(ctx, species.scientific_name, note), whole_page(species.scientific_name)
 
 
 def _one(species) -> list[str]:
@@ -381,7 +392,7 @@ def token(key: tuple) -> str:
 
 
 def render(ctx: Context) -> Image.Image:
-    return mode_of(ctx.mode).render(ctx)
+    return mode_of(ctx.mode).draw(ctx)[0]
 
 
 def subjects(ctx: Context) -> list[str]:
@@ -389,20 +400,29 @@ def subjects(ctx: Context) -> list[str]:
     return mode_of(ctx.mode).subjects(ctx)
 
 
-_cache: tuple[tuple, bytes] | None = None
+_cache: tuple[tuple, bytes, Birds] | None = None
 _cache_lock = threading.Lock()
 
 
-def png_bytes(ctx: Context) -> bytes:
-    """The current page as PNG, for the HTTP endpoints. The lock is held across
-    the render so concurrent kiosk requests wait for one render instead of each
-    doing their own."""
+def _page(ctx: Context) -> tuple[bytes, Birds]:
+    """The current page as PNG and where its birds are, for the HTTP endpoints.
+    The lock is held across the render so concurrent kiosk requests wait for
+    one render instead of each doing their own."""
     global _cache
     with _cache_lock:
         key = state_key(ctx)
-        if _cache is not None and _cache[0] == key:
-            return _cache[1]
-        buffer = io.BytesIO()
-        render(ctx).save(buffer, format="PNG")
-        _cache = (key, buffer.getvalue())
-        return _cache[1]
+        if _cache is None or _cache[0] != key:
+            image, birds = mode_of(ctx.mode).draw(ctx)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            _cache = (key, buffer.getvalue(), birds)
+        return _cache[1], _cache[2]
+
+
+def png_bytes(ctx: Context) -> bytes:
+    return _page(ctx)[0]
+
+
+def bird_at(ctx: Context, x: float, y: float) -> str | None:
+    """The species drawn at (x, y) on the page, as fractions of its width and height."""
+    return _page(ctx)[1].at(x, y)

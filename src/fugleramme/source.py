@@ -133,4 +133,14 @@ class Source(Protocol):
 
     def stats(self) -> dict: ...
 
+    def best_call(self, scientific_name: str) -> Detection | None:
+        """The detection of this species the detector was surest of that kept
+        its clip, or None for none."""
+        ...
+
+    def clip(self, detection_id: int) -> tuple[str, bytes] | None:
+        """A detection's recording, as (content type, body), or None when the
+        detector holds none by that id."""
+        ...
+
     def close(self) -> None: ...

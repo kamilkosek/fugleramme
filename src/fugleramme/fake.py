@@ -1,8 +1,9 @@
 """A fake BirdNET-Go for a hardware-free dev loop, or a fake BirdWeather station.
 
 Serves the slice of `/api/v2` the frame reads - the species summary, the recent
-detections, the locale list, the name dictionaries and the species list in the
-station's own language - over generated in-memory detections.
+detections, one species' detections and their clips, the locale list, the name
+dictionaries and the species list in the station's own language - over
+generated in-memory detections.
 
 The shapes are upstream's, warts and all: a detection carries its date and time
 as two strings of station-local wall clock with no offset, beside a `timestamp`
@@ -21,11 +22,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import gzip
+import io
 import json
 import random
 import re
 import secrets
 import threading
+import wave
 from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -254,11 +257,34 @@ def detections(rows: list[Detection], limit: int = 10) -> list[dict[str, Any]]:
             "scientificName": row.scientific_name,
             "commonName": _common(row.scientific_name),
             "confidence": row.confidence,
+            "clipName": f"clip_{row.id}.wav",
             "verified": "false_positive" if row.false_positive else "unverified",
             "locked": False,
         }
         for row in rows[:limit]
     ]
+
+
+def species_detections(
+    rows: list[Detection], species: str, sort_by: str, limit: int
+) -> dict[str, Any]:
+    """`/detections?species=`: one species' rows, the surest first under
+    `sortBy=confidence_desc`, else the newest, in upstream's paged envelope."""
+    picked = [row for row in rows if row.scientific_name.lower() == species.strip().lower()]
+    if sort_by == "confidence_desc":
+        picked.sort(key=lambda row: -row.confidence)
+    return {"data": detections(picked, limit), "total": len(picked)}
+
+
+def clip(seconds: float = 0.5, rate: int = 8000) -> bytes:
+    """A clip of silence, standing in for what upstream recorded."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(bytes(2 * round(seconds * rate)))
+    return buffer.getvalue()
 
 
 def _int(query: dict[str, list[str]], name: str, default: int = 0) -> int:
@@ -419,6 +445,16 @@ def make_handler(
                 )
             elif route == f"{API}/detections/recent":
                 self._json(200, detections(rows, _int(query, "limit", 10) or 10))
+            elif route == f"{API}/detections":
+                species, sort_by = _one(query, "species"), _one(query, "sortBy")
+                limit = _int(query, "numResults", 100) or 100
+                self._json(200, species_detections(rows, species, sort_by, limit))
+            elif route.startswith(f"{API}/audio/"):
+                known = {str(row.id) for row in rows}
+                if route.rsplit("/", 1)[1] in known:
+                    self._send(200, clip(), {"Content-Type": "audio/wav"})
+                else:
+                    self._json(404, {"error": "Not found"})
             elif route == f"{API}/settings/locales":
                 self._json(200, locales(every_language))
             elif route == f"{API}/settings/birdnet":

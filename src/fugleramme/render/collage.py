@@ -100,6 +100,55 @@ _KEY_LEADING = 1.2  # the key's line height, em
 # (text, font, flat) -> the label's alpha mask, as page.text_mask draws it.
 _Mask = Callable[[str, ImageFont.FreeTypeFont, bool], Image.Image]
 
+# A tap on the kiosk is matched on a grid of this many page pixels: finer than a
+# finger, and small enough to keep beside the page.
+_HIT_CELL = 8
+_HIT_REACH = 3  # cells off a bird that a tap still counts as on it
+
+
+@dataclass(frozen=True, eq=False)
+class Birds:
+    """Which bird is where on a page, so the kiosk can play the one tapped.
+    `grid` holds, per `_HIT_CELL` square, 1 + the bird's index into `names`,
+    or 0 for bare paper. Matched on the silhouette, not the plate's box: the
+    packer nestles birds into each other's boxes."""
+
+    names: tuple[str, ...]
+    grid: np.ndarray
+
+    def at(self, x: float, y: float) -> str | None:
+        """The bird at (x, y), as fractions of the page's width and height: the
+        one under it, else the nearest within `_HIT_REACH` cells."""
+        rows, cols = self.grid.shape
+        if not (rows and 0 <= x <= 1 and 0 <= y <= 1):
+            return None
+        row, col = min(int(y * rows), rows - 1), min(int(x * cols), cols - 1)
+        top, left = max(0, row - _HIT_REACH), max(0, col - _HIT_REACH)
+        window = self.grid[top : row + _HIT_REACH + 1, left : col + _HIT_REACH + 1]
+        ys, xs = np.nonzero(window)
+        if not len(ys):
+            return None
+        nearest = int(np.argmin((ys + top - row) ** 2 + (xs + left - col) ** 2))
+        return self.names[int(window[ys[nearest], xs[nearest]]) - 1]
+
+
+NO_BIRDS = Birds((), np.zeros((0, 0), dtype=np.int32))
+
+
+def whole_page(name: str) -> Birds:
+    """A page about one bird: a tap anywhere is on it."""
+    return Birds((name,), np.ones((1, 1), dtype=np.int32))
+
+
+def _hit_layer(size: tuple[int, int]) -> Image.Image:
+    return Image.new("I", size, 0)
+
+
+def _birds(names: Sequence[str], layer: Image.Image) -> Birds:
+    cells = (math.ceil(layer.width / _HIT_CELL), math.ceil(layer.height / _HIT_CELL))
+    grid = np.asarray(layer.resize(cells, Image.Resampling.NEAREST), dtype=np.int32)
+    return Birds(tuple(names), grid)
+
 
 def _scaled(img: Image.Image, max_dim: int, flip: bool) -> Image.Image:
     """Scale a trimmed sprite to max_dim on its longest side, optionally mirroring
@@ -419,7 +468,12 @@ def _placements(
         return result
 
 
-def render_collage(
+def render_collage(*args, **kwargs) -> Image.Image:
+    """`draw_collage`'s page alone."""
+    return draw_collage(*args, **kwargs)[0]
+
+
+def draw_collage(
     entries: list[tuple[str, Path | None]],
     resolution: tuple[int, int] = DEFAULT_RESOLUTION,
     show_names: bool = True,
@@ -432,8 +486,9 @@ def render_collage(
     margin: Edges = _DEFAULT_EDGES,
     name_key: bool = False,
     spotlight: str | None = None,
-) -> Image.Image:
-    """Composite the given (name, image) entries into a tightly packed collage.
+) -> tuple[Image.Image, Birds]:
+    """Composite the given (name, image) entries into a tightly packed collage,
+    and where each bird landed on it.
 
     textured: paper grain for the web, flat paper for the panel, whose dither
     would otherwise turn the grain into noise. It also picks the label ink.
@@ -445,23 +500,34 @@ def render_collage(
     spotlight: the entry drawn large in the middle, the rest packed round it.
     """
     canvas = blank(resolution, textured)
+    hits = _hit_layer(canvas.size)
 
     kept = [(name, path) for name, path in entries if path is not None]
+    names = [name for name, _ in kept]
     if not kept:
         draw_perch(canvas, perches, day_ordinal(), textured)
-        return canvas
+        return canvas, NO_BIRDS
     if show_names and name_key:
         _draw_keyed(
-            canvas, kept, textured, font_key, label_size, label_text, layout, margin, spotlight
+            canvas,
+            hits,
+            kept,
+            textured,
+            font_key,
+            label_size,
+            label_text,
+            layout,
+            margin,
+            spotlight,
         )
-        return canvas
+        return canvas, _birds(names, hits)
 
     # Pack pixels from here down; `scale` takes them to the output.
     scale = min(resolution) / _PACK_SHORT
     pack = (round(resolution[0] / scale), round(resolution[1] / scale))
-    names = [name for name, _ in kept]
     placed, used_px = _draw_birds(
         canvas,
+        hits,
         kept,
         (0, 0),
         pack,
@@ -480,12 +546,13 @@ def render_collage(
         font = fonts.load(font_key, max(1, round(used_px * scale)))
         texts = {p.index: label_text(names[p.index]) for p in placed}
         held = names.index(spotlight) if spotlight in names else None
-        _stamp_labels(canvas, placed, texts, font, scale, (0, 0), textured, held=held)
-    return canvas
+        _stamp_labels(canvas, hits, placed, texts, font, scale, (0, 0), textured, held=held)
+    return canvas, _birds(names, hits)
 
 
 def _draw_birds(
     canvas: Image.Image,
+    hits: Image.Image,
     kept: list[tuple[str, Path]],
     origin: tuple[int, int],
     pack: tuple[int, int],
@@ -500,8 +567,9 @@ def _draw_birds(
     spotlight: str | None = None,
 ) -> tuple[tuple[_Placed, ...], int]:
     """Pack the birds into a `pack` box and draw them at `origin`, `scale`
-    times larger, labels reserved but not drawn. Returns the placements and
-    the label size they packed at."""
+    times larger, labels reserved but not drawn, and each one's silhouette
+    into `hits` as 1 + its index. Returns the placements and the label size
+    they packed at."""
     arts = [trim(path) for _, path in kept]
     # Mass sizes the bird; this sizes the plate it is drawn on.
     ratios = [span_ratio(path, art.size) for (_, path), art in zip(kept, arts, strict=True)]
@@ -544,6 +612,8 @@ def _draw_birds(
         corner = (at[0] - PAD, at[1] - PAD)
         proc = process_sprite(art, corner, textured=textured)
         canvas.paste(proc, corner, proc)
+        solid = art.getchannel("A").point(lambda a: 255 if a > _ALPHA_CUTOFF else 0)
+        hits.paste(p.index + 1, (*at, at[0] + art.width, at[1] + art.height), solid)
     return placed, used_px
 
 
@@ -560,6 +630,7 @@ def _spotlit(
 
 def _stamp_labels(
     canvas: Image.Image,
+    hits: Image.Image,
     placed: Iterable[_Placed],
     texts: dict[int, str],
     font: ImageFont.FreeTypeFont,
@@ -570,7 +641,7 @@ def _stamp_labels(
     held: int | None = None,
 ) -> None:
     """Each text centred in the box its bird reserved for it, the `held` bird's
-    set larger as it was packed."""
+    set larger as it was packed. A tap on the text is a tap on its bird."""
     larger = fonts.resized(font, round(font.size * SPOTLIGHT_LABEL))
     for p in placed:
         if p.label_at is None:
@@ -579,6 +650,7 @@ def _stamp_labels(
         at = _at(p.label_at, scale, origin)
         centred = at[0] + round((p.label_w * scale - mask.width) / 2)
         stamp(canvas, mask, (centred, at[1]), textured)
+        hits.paste(p.index + 1, (centred, at[1], centred + mask.width, at[1] + mask.height))
 
 
 @dataclass(frozen=True)
@@ -675,6 +747,7 @@ def _figures_box(count: int) -> _Mask:
 
 def _draw_keyed(
     canvas: Image.Image,
+    hits: Image.Image,
     kept: list[tuple[str, Path]],
     textured: bool,
     font_key: str,
@@ -699,6 +772,7 @@ def _draw_keyed(
     origin = _at((bx0, by0), scale)
     placed, used_px = _draw_birds(
         canvas,
+        hits,
         kept,
         origin,
         (bx1 - bx0, by1 - by0),
@@ -717,7 +791,9 @@ def _draw_keyed(
     if used_px:
         font = fonts.load(font_key, max(1, round(used_px * scale)))
         numbers = {p.index: str(n) for n, p in enumerate(order, 1)}
-        _stamp_labels(canvas, order, numbers, font, scale, origin, textured, figures_mask, held)
+        _stamp_labels(
+            canvas, hits, order, numbers, font, scale, origin, textured, figures_mask, held
+        )
 
     pad = max(1, round(key.px * scale))  # also room for the italic's overhang, cropped off below
     font = fonts.load(font_key, pad)

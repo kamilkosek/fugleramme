@@ -8,7 +8,7 @@ Covers the `web/` package.
 
 - A login page and a session cookie, never `WWW-Authenticate`. This is BirdNET-Go's shape: its "basic auth" is a password typed into a form in its own UI, and the browser's credential dialog appears nowhere in that product. A frame that popped one would not read as the same appliance.
 - Everything that must 401 for a signed-out admin is in `GATED`; add to it when the page learns to fetch something new. The static files are not in it on purpose - `admin.css` is what the login page is styled with. A browser (`Accept: text/html`) is redirected to the login page; anything else gets the 401, so a fetch does not land a login page in a JSON parser.
-- The kiosk side stays open whatever is set: the public demo reads `/collage.png` and `/state`, the container's healthcheck reads `/health`, and an external panel's board reads `/frame.e6` or `/frame.png` and posts its buttons to `/press`. `/press` is open like the panel's own buttons, which anyone at the frame can press: a headless client cannot hold a browser session, and a sign-out anywhere would rotate the secret and silently end it.
+- The kiosk side stays open whatever is set: the public demo reads `/collage.png` and `/state`, the container's healthcheck reads `/health`, and an external panel's board reads `/frame.e6` or `/frame.png` and posts its buttons to `/press`, and a tap on a bird reads `/bird` and plays `/clip`. `/press` is open like the panel's own buttons, which anyone at the frame can press: a headless client cannot hold a browser session, and a sign-out anywhere would rotate the secret and silently end it.
 - `Settings.admin_locked` is the whole gate: the switch on *and* a password saved. Either half alone is an open frame, so a switch flipped on before a password is typed cannot lock anyone out.
 - The cookie is signed with `session_secret` mixed with the password, so changing the password ends every session, and the secret is rotated on sign-out and on a password change - which is real revocation, unlike BirdNET-Go, whose access token outlives its own logout. No `Secure` flag: the frame is plain HTTP on a LAN and the cookie would never be sent.
 - `admin.form_changes` drops `session_secret` from every post and treats a password field that still starts with `PASSWORD_SET` as untouched; `admin.js` empties such a field on focus. Typing on the end of the bullets would otherwise save them as the password, a lockout.
@@ -34,3 +34,10 @@ Covers the `web/` package.
 - The margin's edge sliders are named for the glass (`margin_top` is the top at rotation 0), and `admin.js` relabels and reorders them by the rotation in the form, so they always read as the frame hangs.
 - While the margin is dragged, the `.mat` band over the preview stands in for the render and goes when one starts. It is not shown while the preview is loading: there is no page to shade.
 - The admin is used from a remote browser against a headless Pi. Do not design flows around `file://` URLs, opening a browser on the server, or other local-GUI assumptions.
+
+## A tap plays the bird (`/bird`, `/clip`)
+
+- The page carries where its birds landed (`collage.Birds`), drawn from each bird's silhouette as it is pasted, since the packer nestles birds into each other's boxes. `modes._page` caches it beside the PNG under the same key, so a tap reads the page the kiosk was served, not a new render.
+- A tap is sent as fractions of the image, so it does not care what size the browser shows the page at.
+- `/clip` proxies BirdNET-Go's `/audio/{id}` rather than linking to it: the detector is another origin, and may want a session the browser does not hold.
+- A BirdWeather station has no clips here: `best_call` answers None, and the tap plays nothing.

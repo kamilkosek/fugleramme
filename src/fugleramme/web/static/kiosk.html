@@ -76,6 +76,28 @@
     next.onanimationend = () => { collage.src = next.src; collage.decode().finally(() => next.remove()); };
     over.append(next);
   };
+  // A tap on a bird plays the surest call the detector kept of it; a tap on the
+  // same bird again, or on bare paper, stops it.
+  const call = new Audio();
+  let playing = null;
+  call.onended = () => { playing = null; };
+  addEventListener("click", async (event) => {
+    if (collage.hidden) return;
+    const box = collage.getBoundingClientRect();
+    const x = (event.clientX - box.left) / box.width;
+    const y = (event.clientY - box.top) / box.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+    try {
+      const bird = await (await fetch(`/bird?x=${x}&y=${y}`, {cache: "no-store"})).json();
+      const again = bird.species === playing;
+      call.pause();
+      playing = null;
+      if (!bird.clip || again) return;
+      call.src = bird.clip;
+      playing = bird.species;
+      await call.play();
+    } catch (e) { playing = null; }
+  });
   let token = null;
   async function tick() {
     try {

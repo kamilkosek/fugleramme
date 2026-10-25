@@ -184,7 +184,8 @@ def make_handler(
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            if "Cache-Control" not in (extra or {}):
+                self.send_header("Cache-Control", "no-store")
             for name, value in (extra or {}).items():
                 self.send_header(name, value)
             self.end_headers()
@@ -442,6 +443,29 @@ def make_handler(
                 JSON,
             )
 
+        def _bird(self):
+            # Kiosk side, so open: the page is, and a tap only reads what it shows.
+            query = self._query()
+            try:
+                x, y = float(query["x"][0]), float(query["y"][0])
+            except (KeyError, ValueError):
+                self._send(400, b"x and y are fractions of the page", "text/plain")
+                return
+            name = modes.bird_at(self._context(store.get()), x, y)
+            call = source.best_call(name) if name else None
+            body = {"species": name, "clip": f"/clip?id={call.id}" if call else None}
+            self._send(200, json.dumps(body).encode(), JSON)
+
+        def _clip(self):
+            detection = self._query().get("id", [""])[0]
+            found = source.clip(int(detection)) if detection.isdigit() else None
+            if found is None:
+                self._send(404, b"no such clip", "text/plain")
+                return
+            content_type, body = found
+            # A clip never changes, so a second tap need not fetch it again.
+            self._send(200, body, content_type, {"Cache-Control": "max-age=86400"})
+
         def _paper(self):
             self._send_cached(paper_png(), "image/png")
 
@@ -454,6 +478,8 @@ def make_handler(
             "/frame.png": _frame_png,
             "/preview.png": _preview_png,
             "/state": _state,
+            "/bird": _bird,
+            "/clip": _clip,
             "/paper.png": _paper,
             "/species": _species,
             "/stations": _stations,
