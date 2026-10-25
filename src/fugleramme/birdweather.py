@@ -533,5 +533,12 @@ class BirdWeatherSource:
             "top": [{"scientific_name": name, "n": n, "best": None} for name, n in ever[:10]],
         }
 
+    def best_call(self, scientific_name: str) -> Detection | None:
+        """None: a tap plays BirdNET-Go's clips, and a station's are not read here."""
+        return None
+
+    def clip(self, detection_id: int) -> tuple[str, bytes] | None:
+        return None
+
     def close(self) -> None:
         """No connection to release: every call is its own request."""

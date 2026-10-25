@@ -89,6 +89,14 @@ def canonical(scientific_name: str) -> str:
     return _CURRENT_NAME.get(_shape(scientific_name), scientific_name.strip())
 
 
+def spellings(scientific_name: str) -> tuple[str, ...]:
+    """Every name a detector may have stored a species under, as "Genus species":
+    the current one, then the label BirdNET still uses."""
+    current = canonical(scientific_name)
+    legacy = _LEGACY_KEY.get(normalize(current))
+    return (current, legacy.replace("-", " ").capitalize()) if legacy else (current,)
+
+
 def artwork_keys(scientific_name: str) -> tuple[str, ...]:
     """Filename keys to look for a species' artwork under: the current name, then
     the label BirdNET still uses.

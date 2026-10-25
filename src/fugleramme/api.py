@@ -5,6 +5,8 @@ be the container beside it or an install elsewhere on the network:
 
     GET /analytics/species/summary   -> per-species aggregate, false positives dropped
     GET /detections/recent           -> the newest rows, false positives included
+    GET /detections?species=…        -> one species' rows, surest first, for a tap on the kiosk
+    GET /audio/{id}                  -> a detection's clip
 
 Both are filtered to birds on the way in (`taxa.is_bird`), so a station that also
 classifies bats or noise offers nothing above this module that it cannot draw.
@@ -32,7 +34,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
 from .birdweather import BirdWeatherSource
-from .names import canonical, normalize
+from .names import canonical, normalize, spellings
 from .settings import SettingsStore
 from .source import (
     BIRDNET_GO,
@@ -75,6 +77,9 @@ _LATEST_SCAN = 10
 # The summary only takes dates, so a sub-day window is counted by hand from the
 # feed - which takes no date filter, leaving the row count as the only lever.
 _WINDOW_SCAN = 1000
+# The surest rows of a species may be false positives or have lost their clip
+# to retention, so ask for a few and take the first that is neither.
+_BEST_SCAN = 10
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -455,6 +460,37 @@ class ApiSource:
             ],
         }
 
+    def best_call(self, scientific_name: str) -> Detection | None:
+        # Asked under each name, since a station upgraded across a
+        # reclassification stores one bird under both.
+        rows = [
+            row
+            for name in spellings(scientific_name)
+            for row in self._get(
+                "/detections", species=name, sortBy="confidence_desc", numResults=_BEST_SCAN
+            ).get("data")
+            or []
+        ]
+        try:
+            calls = [
+                _detection(row)
+                for row in rows
+                if row.get("verified") != "false_positive"
+                and row.get("clipName")
+                and canonical(row["scientificName"]) == canonical(scientific_name)
+            ]
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise Unavailable(f"unreadable detections: {error}") from error
+        return max(calls, key=lambda call: call.confidence, default=None)
+
+    def clip(self, detection_id: int) -> tuple[str, bytes] | None:
+        status, headers, body = self.request(f"/audio/{detection_id}")
+        if status == 404:
+            return None
+        if status != 200:
+            raise Unavailable(f"GET /audio/{detection_id} answered {status}")
+        return headers.get("content-type", "application/octet-stream"), body
+
     def close(self) -> None:
         """No connection to release: every call is its own request."""
 
@@ -512,6 +548,12 @@ class Configured:
 
     def stats(self) -> dict:
         return self.source.stats()
+
+    def best_call(self, scientific_name: str) -> Detection | None:
+        return self.source.best_call(scientific_name)
+
+    def clip(self, detection_id: int) -> tuple[str, bytes] | None:
+        return self.source.clip(detection_id)
 
     def request(
         self,

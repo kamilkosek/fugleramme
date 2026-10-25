@@ -16,10 +16,11 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from PIL import Image
 
-from fugleramme import api, birdweather, fake
+from fugleramme import api, birdweather, fake, modes
 from fugleramme.api import ApiSource
 from fugleramme.settings import Settings, SettingsStore
 from fugleramme.status import Status
@@ -468,6 +469,8 @@ def test_every_route_is_either_the_kiosk_or_behind_the_password(tmp_path, source
         "/collage.png",
         "/frame.e6",
         "/state",
+        "/bird",
+        "/clip",
         "/paper.png",
         "/health",
     }
@@ -836,3 +839,39 @@ def test_a_signed_out_post_saves_nothing(locked, tmp_path):
 
     _post(locked + "/admin", {"mode": "latest"}, _signed_in(locked))
     assert SettingsStore(tmp_path / SETTINGS).get().mode == "latest"
+
+
+def _tap_on_a_bird(base: str) -> tuple[float, float]:
+    """A point on a drawn bird, read off the page the kiosk was just served."""
+    assert _fetch(base + "/collage.png")[0] == 200
+    birds = modes._cache[2] if modes._cache else None
+    assert birds is not None
+    rows, cols = birds.grid.shape
+    row, col = (int(v) for v in np.argwhere(birds.grid > 0)[0])
+    return (col + 0.5) / cols, (row + 0.5) / rows
+
+
+def test_a_tap_on_the_kiosk_finds_the_bird_and_its_clip(frame):
+    x, y = _tap_on_a_bird(frame)
+    status, _headers, body = _fetch(f"{frame}/bird?x={x}&y={y}")
+    bird = json.loads(body)
+    assert status == 200 and bird["species"] in {"Turdus merula", "Parus major"}
+    assert bird["clip"].startswith("/clip?id=")
+
+    status, headers, audio = _fetch(frame + bird["clip"])
+    assert status == 200 and headers["Content-Type"] == "audio/wav"
+    assert audio.startswith(b"RIFF")
+    assert headers["Cache-Control"] == "max-age=86400"
+
+
+def test_a_tap_on_paper_or_a_bad_query_plays_nothing(frame):
+    _fetch(frame + "/collage.png")
+    assert json.loads(_fetch(frame + "/bird?x=2&y=2")[2]) == {"species": None, "clip": None}
+    assert _fetch(frame + "/bird?x=left")[0] == 400
+    assert _fetch(frame + "/clip?id=nope")[0] == 404
+    assert _fetch(frame + "/clip?id=999999")[0] == 404
+
+
+def test_a_tap_is_open_like_the_kiosk(locked):
+    x, y = _tap_on_a_bird(locked)
+    assert _fetch(f"{locked}/bird?x={x}&y={y}")[0] == 200
