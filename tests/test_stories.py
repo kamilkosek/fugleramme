@@ -3,6 +3,7 @@ read aloud on request, kept on disk, and redone only when asked."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
@@ -132,6 +133,10 @@ def test_a_chunk_is_spoken_once_and_kept(tmp_path, source, ai):
     assert spoken == ["Chunk 2."]
     assert stories.voice(BLACKBIRD, "de", 99) is None
 
+    changed = Stories(tmp_path, source(), dataclasses.replace(_config(url), voice_id="other"))
+    assert changed.voice(BLACKBIRD, "de", 2) == b"ID3 Chunk 2."
+    assert spoken == ["Chunk 2.", "Chunk 2."]  # a new voice is spoken afresh
+
 
 def test_with_no_key_there_are_no_stories_and_nothing_reads_aloud(tmp_path, source, ai):
     url, asked, _spoken, _answer = ai
@@ -190,7 +195,10 @@ def _story(base: str, species: str = TIT) -> dict:
 def test_the_kiosk_gets_a_heard_bird_s_story_its_voice_and_its_picture(told):
     _until(lambda: _story(told)["state"] == "ready")
     answer = _story(told)
-    assert answer["chunks"] == CHUNKS and answer["voice"] is True
+    assert (
+        answer["chunks"] == CHUNKS
+        and answer["voice"] == "21m00Tcm4TlvDq8ikWAM-eleven_multilingual_v2"
+    )
     assert answer["title"] == TIT and answer["language"] == "de"  # no dictionary offline
 
     quoted = urllib.parse.quote(TIT)

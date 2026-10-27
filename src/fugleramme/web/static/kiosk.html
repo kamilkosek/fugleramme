@@ -123,7 +123,7 @@
   let playing = null;
   call.onended = () => { playing = null; };
   // The open story: which bird, its chunks, the one showing, and whether it is read aloud.
-  const tale = { species: null, chunks: [], index: 0, seconds: 8, reading: false, timer: 0, voice: null };
+  const tale = { species: null, chunks: [], index: 0, seconds: 8, reading: false, timer: 0, voice: null, speaker: "" };
   const named = (species) => "species=" + encodeURIComponent(species);
 
   addEventListener("click", async (event) => {
@@ -170,6 +170,7 @@
     if (told.state === "pending") { tale.timer = setTimeout(() => load(species), 2000); return; }
     if (told.state !== "ready") { chunk.textContent = ""; segments(1); run(tale.seconds * 1000, close); return; }
     read.hidden = !told.voice;
+    tale.speaker = told.voice;
     tale.chunks = told.chunks;
     segments(told.chunks.length);
     step(0);
@@ -211,7 +212,7 @@
 
   // Read chunk `n` aloud; the next follows once it is spoken, so text and voice stay together.
   function speak(n) {
-    const url = (i) => `/story/voice?${named(tale.species)}&n=${i}`;
+    const url = (i) => `/story/voice?${named(tale.species)}&n=${i}&voice=${encodeURIComponent(tale.speaker)}`;
     const voice = new Audio(url(n));
     tale.voice = voice;
     voice.onloadedmetadata = () => { if (isFinite(voice.duration)) run(voice.duration * 1000); };

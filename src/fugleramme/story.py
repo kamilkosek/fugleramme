@@ -93,6 +93,12 @@ class Config:
     def speaks(self) -> bool:
         return self.writes and bool(self.voice_key)
 
+    @property
+    def speaker(self) -> str:
+        """The voice and model a chunk is read in, so a new one is spoken afresh
+        rather than served from the old one's recordings."""
+        return quote(f"{self.voice_id}-{self.voice_model}", safe="")
+
     @classmethod
     def from_env(cls) -> Config:
         env = os.environ.get
@@ -327,11 +333,11 @@ class Stories:
         story = self.get(species, language)
         if not self.config.speaks or story is None or not 0 <= index < len(story.chunks):
             return None
-        path = self._voices(species, language) / f"{index}.mp3"
+        config = self.config
+        path = self._voices(species, language) / config.speaker / f"{index}.mp3"
         with self._voice_lock:
             if path.exists():
                 return path.read_bytes()
-            config = self.config
             audio = _post(
                 f"{ELEVENLABS}/text-to-speech/{quote(config.voice_id)}?output_format=mp3_44100_128",
                 {"xi-api-key": config.voice_key, "Accept": "audio/mpeg"},

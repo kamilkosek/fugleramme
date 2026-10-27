@@ -507,7 +507,8 @@ def make_handler(
                 "language": language,
                 "chunks": list(told.chunks) if told else [],
                 "seconds": stories.config.seconds,
-                "voice": stories.config.speaks,
+                # Part of each voice URL, so a new voice is not served from the browser's cache.
+                "voice": stories.config.speaker if stories.config.speaks else "",
             }
             self._send(200, json.dumps(body, ensure_ascii=False).encode(), JSON)
 

@@ -44,5 +44,9 @@ heard with its text. **Redo** asks the model again; the kiosk shows the new text
 once it is written. Its spoken chunks are made again too, the next time someone
 presses play.
 
+A new `ELEVENLABS_VOICE_ID` or `ELEVENLABS_MODEL` takes over after a restart:
+every chunk is spoken again in it, and the old voice's recordings are kept, so
+switching back costs nothing.
+
 The page is behind the admin password when one is set. The kiosk's own story
 routes are open like the rest of the kiosk.
