@@ -327,7 +327,6 @@ class Stories:
         )
         body = {
             "model": config.model,
-            "temperature": 0.7,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": _PROMPT.format(language=language)},
