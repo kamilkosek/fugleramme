@@ -40,17 +40,18 @@
   #chunk.out { opacity: 0; }
   #chunk .dots::after { content: "..."; animation: dots 1.2s steps(4) infinite; display: inline-block; overflow: hidden; vertical-align: bottom; width: 0; }
   @keyframes dots { to { width: 1.2em; } }
-  #bar { position: absolute; left: 3vmin; right: 7vmin; bottom: 7vmin; height: .7vmin; border-radius: 1vmin; background: #ddd4c1; overflow: hidden; }
+  /* One segment per chunk across the top, as in a phone's story view: told ones full, the one showing filling. */
+  #bar { position: absolute; top: 2vmin; left: 2vmin; right: 2vmin; display: flex; gap: .8vmin; }
+  #bar span { flex: 1; height: .7vmin; border-radius: 1vmin; background: #ddd4c1; overflow: hidden; }
   #bar i { display: block; height: 100%; width: 0; background: #9a8a69; }
   .quiet { background: none; border: 0; padding: 1.5vmin; color: #a99d85; font: 4.5vmin/1 Georgia, serif; cursor: pointer; }
   #read { position: absolute; left: 1.5vmin; bottom: 9vmin; font-size: 3.6vmin; }
   #read.on { color: #6b5d40; }
-  #close { position: absolute; top: 2vmin; right: 2vmin; }
+  #close { position: absolute; top: 3.5vmin; right: 2vmin; }
   @media (orientation: portrait) {
     #detail { flex-direction: column; }
     #plate { flex-basis: 45%; }
     #tale { flex-basis: 55%; padding: 2vmin 7vmin 14vmin; }
-    #bar { left: 7vmin; }
     #read { left: 5.5vmin; bottom: 9vmin; }
   }
 </style>
@@ -67,8 +68,8 @@
     <div id="sci"></div>
     <div id="chunk"></div>
     <button id="read" class="quiet" hidden aria-label="Read aloud">&#9654;</button>
-    <div id="bar"><i></i></div>
   </div>
+  <div id="bar"></div>
   <button id="close" class="quiet" aria-label="Close">&#215;</button>
 </div>
 <noscript><p>Fugleramme needs JavaScript to run in a browser.</p></noscript>
@@ -116,7 +117,7 @@
   // stories set up the tap only plays the call, and a tap on the same bird again,
   // or on bare paper, stops it.
   const $ = (id) => document.getElementById(id);
-  const detail = $("detail"), chunk = $("chunk"), bar = $("bar").firstElementChild;
+  const detail = $("detail"), chunk = $("chunk"), bar = $("bar");
   const read = $("read"), plate = $("plate").firstElementChild;
   const call = new Audio();
   let playing = null;
@@ -150,8 +151,7 @@
     plate.src = "/story/plate?" + named(bird.species);
     $("title").textContent = $("sci").textContent = "";
     chunk.innerHTML = '<span class="dots"></span>';
-    bar.style.transition = "none";
-    bar.style.width = "0";
+    bar.replaceChildren();
     read.hidden = true;
     detail.classList.add("open");
     if (bird.clip) { call.src = bird.clip; call.play().catch(() => {}); }
@@ -168,9 +168,10 @@
     $("sci").textContent = told.subtitle || "";
     tale.seconds = told.seconds || 8;
     if (told.state === "pending") { tale.timer = setTimeout(() => load(species), 2000); return; }
-    if (told.state !== "ready") { chunk.textContent = ""; run(tale.seconds * 1000, close); return; }
+    if (told.state !== "ready") { chunk.textContent = ""; segments(1); run(tale.seconds * 1000, close); return; }
     read.hidden = !told.voice;
     tale.chunks = told.chunks;
+    segments(told.chunks.length);
     step(0);
   }
 
@@ -183,14 +184,28 @@
     if (tale.reading) speak(n); else run(tale.seconds * 1000, () => step(n + 1));
   }
 
-  // The bar empties over `ms`, then `then` runs.
+  function segments(n) {
+    bar.replaceChildren(...Array.from({length: n}, () => {
+      const segment = document.createElement("span");
+      segment.append(document.createElement("i"));
+      return segment;
+    }));
+  }
+
+  // The showing chunk's segment fills over `ms`, then `then` runs.
   function run(ms, then) {
     clearTimeout(tale.timer);
-    bar.style.transition = "none";
-    bar.style.width = "100%";
-    void bar.offsetWidth;  // commit the full bar before it starts to empty
-    bar.style.transition = `width ${ms}ms linear`;
-    bar.style.width = "0";
+    const fills = [...bar.querySelectorAll("i")];
+    fills.forEach((fill, k) => {
+      fill.style.transition = "none";
+      fill.style.width = k < tale.index ? "100%" : "0";
+    });
+    const fill = fills[tale.index];
+    if (fill) {
+      void fill.offsetWidth;  // commit the empty segment before it starts to fill
+      fill.style.transition = `width ${ms}ms linear`;
+      fill.style.width = "100%";
+    }
     if (then) tale.timer = setTimeout(then, ms);
   }
 
