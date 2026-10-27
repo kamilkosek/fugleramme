@@ -41,3 +41,12 @@ Covers the `web/` package.
 - A tap is sent as fractions of the image, so it does not care what size the browser shows the page at.
 - `/clip` proxies BirdNET-Go's `/audio/{id}` rather than linking to it: the detector is another origin, and may want a session the browser does not hold.
 - A BirdWeather station has no clips here: `best_call` answers None, and the tap plays nothing.
+
+## A tap opens the bird's story (`story.py`, `/story*`, `/stories`)
+
+- With stories set up (`story.Config.writes`), `/bird` says so and the kiosk opens the detail view instead of only playing the call. Without, the tap is the bare call as above.
+- A story is written once per species and language and kept as JSON under `<data>/stories/<language>/`, its spoken chunks as MP3 beside it. A redo rewrites the JSON and drops the MP3s, so a chunk is never read in an old wording.
+- Every story route reads `species` through `_heard`: only a bird in the life list is written, spoken or pictured, so an open kiosk cannot spend the key on any name a stranger sends.
+- `_page_png` queues the page's birds, so a story is usually ready before the first tap. One worker thread writes them in turn; a failure is held for `story._RETRY` so a broken key is not asked once per poll.
+- A failed voice is ElevenLabs', not the detector's: `_story_voice` answers 502 itself rather than raising `Unavailable`, which would log the detector as gone. The kiosk then drops back to its timer.
+- Read aloud, the bar runs for the clip's own length and the next chunk follows when it ends, so the voice never trails the text.

@@ -32,6 +32,7 @@ import logging
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,8 +40,9 @@ from pathlib import Path
 from typing import ClassVar
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from .. import __version__, buttons, e6, modes, updates
+from .. import __version__, buttons, e6, modes, story, updates
 from ..languages import namer
+from ..names import canonical, image_for
 from ..panel import Panel, resolution_of, to_glass
 from ..render.paper import paper_tile
 from ..settings import Settings, SettingsStore, merged
@@ -58,7 +60,17 @@ JSON = "application/json"
 # What a password covers (#52). The kiosk stays open whatever is set: it is the
 # product, and the demo page and the container's healthcheck read it as strangers.
 GATED = frozenset(
-    {"/admin", "/preview.png", "/species", "/stations", "/update", "/detector", LOGOUT}
+    {
+        "/admin",
+        "/preview.png",
+        "/species",
+        "/stations",
+        "/update",
+        "/detector",
+        "/stories",
+        "/stories.json",
+        LOGOUT,
+    }
 )
 
 COOKIE = "fugleramme_session"
@@ -133,6 +145,8 @@ def make_handler(
     panel: Panel | None,
     status: Status,
 ):
+    stories = story.Stories(store.path.parent, source)
+
     def glass(settings: Settings) -> tuple[int, int] | None:
         """The panel the page is laid out for, or None: nothing for the kiosk to lock to."""
         if panel or settings.external_panel:
@@ -343,7 +357,10 @@ def make_handler(
             if source.base_url != last_from:
                 last_page, last_from = None, source.base_url
             try:
-                last_page = modes.png_bytes(self._context(store.get()))
+                ctx = self._context(store.get())
+                last_page = modes.png_bytes(ctx)
+                # Written ahead, so the first tap on a new bird need not wait for it.
+                stories.prepare(list(modes.bird_names(ctx)), *self._told(ctx))
             except Unavailable as exc:
                 if last_page is None:
                     raise
@@ -453,8 +470,89 @@ def make_handler(
                 return
             name = modes.bird_at(self._context(store.get()), x, y)
             call = source.best_call(name) if name else None
-            body = {"species": name, "clip": f"/clip?id={call.id}" if call else None}
+            body = {
+                "species": name,
+                "clip": f"/clip?id={call.id}" if call else None,
+                "story": bool(name) and stories.config.writes,
+            }
             self._send(200, json.dumps(body).encode(), JSON)
+
+        def _told(self, ctx: modes.Context) -> tuple[str, Callable[[str], str]]:
+            """The language a story is in, and each bird's name in it."""
+            language = story.language_of(ctx.namer.primary)
+            return language, lambda name: ctx.namer.parts(name)[0]
+
+        def _heard(self) -> str | None:
+            """The species asked about, if the station has ever heard it: a
+            stranger on the network cannot spend the key on any bird at all."""
+            asked = canonical(self._query().get("species", [""])[0])
+            heard = {canonical(s.scientific_name) for s in source.life_list()}
+            return asked if asked in heard else None
+
+        def _story(self):
+            name = self._heard()
+            if name is None:
+                self._send(404, b"not heard here", "text/plain")
+                return
+            ctx = self._context(store.get())
+            language, name_of = self._told(ctx)
+            state = stories.state(name, language, name_of)
+            told = stories.get(name, language)
+            parts = ctx.namer.parts(name)
+            body = {
+                "species": name,
+                "state": state,
+                "title": parts[0],
+                "subtitle": name if parts[0] != name else "",
+                "language": language,
+                "chunks": list(told.chunks) if told else [],
+                "seconds": stories.config.seconds,
+                "voice": stories.config.speaks,
+            }
+            self._send(200, json.dumps(body, ensure_ascii=False).encode(), JSON)
+
+        def _story_voice(self):
+            name = self._heard()
+            index = self._query().get("n", [""])[0]
+            language = story.language_of(store.get().primary_language)
+            try:
+                audio = (
+                    stories.voice(name, language, int(index)) if name and index.isdigit() else None
+                )
+            except Unavailable as exc:
+                # ElevenLabs, not the detector: the kiosk falls back to its timer.
+                log.warning("Reading aloud failed: %s", exc)
+                self._send(502, b"nothing read aloud", "text/plain")
+                return
+            if audio is None:
+                self._send(404, b"nothing to read", "text/plain")
+                return
+            self._send(200, audio, "audio/mpeg", {"Cache-Control": "max-age=86400"})
+
+        def _story_plate(self):
+            name = self._heard()
+            ctx = self._context(store.get())
+            art = image_for(name, ctx.images_dir, ctx.style, ctx.day) if name else None
+            if art is None:
+                self._send(404, b"no artwork", "text/plain")
+                return
+            kind = "image/webp" if art.suffix == ".webp" else "image/png"
+            self._send(200, art.read_bytes(), kind, {"Cache-Control": "max-age=3600"})
+
+        def _stories_page(self):
+            self._send(200, (STATIC_DIR / "stories.html").read_bytes(), HTML)
+
+        def _stories_json(self):
+            ctx = self._context(store.get())
+            language, _name_of = self._told(ctx)
+            heard = [s.scientific_name for s in reversed(source.life_list())]
+            body = {
+                "writes": stories.config.writes,
+                "language": language,
+                "model": stories.config.model,
+                "species": stories.listing(heard, language, ctx.namer.inline),
+            }
+            self._send(200, json.dumps(body, ensure_ascii=False).encode(), JSON)
 
         def _clip(self):
             detection = self._query().get("id", [""])[0]
@@ -480,6 +578,11 @@ def make_handler(
             "/state": _state,
             "/bird": _bird,
             "/clip": _clip,
+            "/story": _story,
+            "/story/voice": _story_voice,
+            "/story/plate": _story_plate,
+            "/stories": _stories_page,
+            "/stories.json": _stories_json,
             "/paper.png": _paper,
             "/species": _species,
             "/stations": _stations,
@@ -569,6 +672,13 @@ def make_handler(
                     self._send(400, b"no such button", "text/plain")
                     return
                 buttons.press(button, store, images_dir)
+                self._send(204, b"", "text/plain")
+                return
+            if route == "/stories":
+                ctx = self._context(store.get())
+                language, name_of = self._told(ctx)
+                species = [canonical(name) for name in form.get("species", [])]
+                stories.prepare(species, language, name_of, redo=True)
                 self._send(204, b"", "text/plain")
                 return
             # POST, not a query: the connection test carries a password.

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fugleramme stories</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="stylesheet" href="/admin.css">
+<style>
+  main { max-width: 60rem; margin: 0 auto; padding: 0 1rem 3rem; }
+  article { border-top: 1px solid #ddd4c1; padding: 1rem 0; }
+  article h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+  ol { margin: .5rem 0 0; padding-left: 1.4rem; line-height: 1.5; }
+  .meta { color: #8a8070; font-size: .85rem; }
+  .failure { color: #a04030; font-size: .85rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fugleramme</h1>
+  <nav id="links"><a href="/">Kiosk</a><a href="/admin">Admin</a></nav>
+</header>
+<main>
+  <p id="about" class="meta"></p>
+  <div id="list"></div>
+</main>
+<script>
+  // Every species the station has heard, with its story. Redo asks the model
+  // again; the kiosk shows the new text once it is written.
+  const list = document.getElementById("list");
+  const states = { ready: "", pending: "Writing...", missing: "Not written yet" };
+
+  async function refresh() {
+    const data = await (await fetch("/stories.json", {cache: "no-store"})).json();
+    document.getElementById("about").textContent = data.writes
+      ? `Stories in "${data.language}", written by ${data.model}.`
+      : "No stories: set FUGLERAMME_STORY_KEY and FUGLERAMME_STORY_MODEL on the container.";
+    list.replaceChildren(...data.species.map(row));
+    if (data.species.some((s) => s.state === "pending")) setTimeout(refresh, 3000);
+  }
+
+  function row(s) {
+    const article = document.createElement("article");
+    const title = document.createElement("h2");
+    title.textContent = s.name;
+    const redo = document.createElement("button");
+    redo.type = "button";
+    redo.textContent = s.state === "ready" ? "Redo" : "Write";
+    redo.disabled = s.state === "pending";
+    redo.onclick = () => ask(s.species, redo);
+    title.append(redo);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = states[s.state] || (s.written_at ? `Written ${s.written_at.replace("T", " ")}` : "");
+    const failure = document.createElement("div");
+    failure.className = "failure";
+    failure.textContent = s.failure;
+    const chunks = document.createElement("ol");
+    chunks.replaceChildren(...s.chunks.map((text) => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }));
+    article.append(title, meta, failure, chunks);
+    return article;
+  }
+
+  async function ask(species, button) {
+    button.disabled = true;
+    await fetch("/stories", {
+      method: "POST",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: new URLSearchParams({species}),
+    });
+    refresh();
+  }
+
+  refresh();
+</script>
+</body>
+</html>

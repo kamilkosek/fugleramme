@@ -28,6 +28,31 @@
   @keyframes in { from { opacity: 0; } }
   p { font: 1rem/1.5 system-ui, sans-serif; color: #8a8880; text-align: center; }
   p a { color: inherit; }
+  /* A tapped bird's story: the bird beside its text, or above it on a portrait screen. */
+  #detail { position: fixed; inset: 0; z-index: 2; display: none; background: #f2ede2 url(/paper.png); color: #3b362c; font-family: Georgia, "Noto Serif", serif; }
+  #detail.open { display: flex; animation: in .4s ease-out; }
+  #plate { flex: 1 1 50%; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 5vmin; box-sizing: border-box; }
+  #plate img { max-width: 100%; max-height: 100%; }
+  #tale { flex: 1 1 50%; min-width: 0; position: relative; display: flex; flex-direction: column; justify-content: center; padding: 6vmin 7vmin 12vmin 3vmin; box-sizing: border-box; }
+  #tale h1 { margin: 0; font-weight: normal; font-style: italic; font-size: 6.5vmin; }
+  #sci { margin: .2em 0 1.2em; font-style: italic; font-size: 3vmin; color: #8a8070; }
+  #chunk { font-size: 4.6vmin; line-height: 1.45; min-height: 6em; transition: opacity .5s; }
+  #chunk.out { opacity: 0; }
+  #chunk .dots::after { content: "..."; animation: dots 1.2s steps(4) infinite; display: inline-block; overflow: hidden; vertical-align: bottom; width: 0; }
+  @keyframes dots { to { width: 1.2em; } }
+  #bar { position: absolute; left: 3vmin; right: 7vmin; bottom: 7vmin; height: .7vmin; border-radius: 1vmin; background: #ddd4c1; overflow: hidden; }
+  #bar i { display: block; height: 100%; width: 0; background: #9a8a69; }
+  .quiet { background: none; border: 0; padding: 1.5vmin; color: #a99d85; font: 4.5vmin/1 Georgia, serif; cursor: pointer; }
+  #read { position: absolute; left: 1.5vmin; bottom: 9vmin; font-size: 3.6vmin; }
+  #read.on { color: #6b5d40; }
+  #close { position: absolute; top: 2vmin; right: 2vmin; }
+  @media (orientation: portrait) {
+    #detail { flex-direction: column; }
+    #plate { flex-basis: 45%; }
+    #tale { flex-basis: 55%; padding: 2vmin 7vmin 14vmin; }
+    #bar { left: 7vmin; }
+    #read { left: 5.5vmin; bottom: 9vmin; }
+  }
 </style>
 </head>
 <body>
@@ -35,6 +60,17 @@
 <img id="collage" src="/collage.png" alt="Birds seen recently" hidden>
 <p id="waiting" hidden>Waiting for BirdNET-Go<br><a href="/admin">Configure it in the admin panel</a></p>
 <div id="over"></div>
+<div id="detail" aria-live="polite">
+  <div id="plate"><img alt=""></div>
+  <div id="tale">
+    <h1 id="title"></h1>
+    <div id="sci"></div>
+    <div id="chunk"></div>
+    <button id="read" class="quiet" hidden aria-label="Read aloud">&#9654;</button>
+    <div id="bar"><i></i></div>
+  </div>
+  <button id="close" class="quiet" aria-label="Close">&#215;</button>
+</div>
 <noscript><p>Fugleramme needs JavaScript to run in a browser.</p></noscript>
 <script>
   const DELAY = 5000;  // /state is one query, no render
@@ -76,19 +112,28 @@
     next.onanimationend = () => { collage.src = next.src; collage.decode().finally(() => next.remove()); };
     over.append(next);
   };
-  // A tap on a bird plays the surest call the detector kept of it; a tap on the
-  // same bird again, or on bare paper, stops it.
+  // A tap on a bird opens its story beside it and plays its surest call. With no
+  // stories set up the tap only plays the call, and a tap on the same bird again,
+  // or on bare paper, stops it.
+  const $ = (id) => document.getElementById(id);
+  const detail = $("detail"), chunk = $("chunk"), bar = $("bar").firstElementChild;
+  const read = $("read"), plate = $("plate").firstElementChild;
   const call = new Audio();
   let playing = null;
   call.onended = () => { playing = null; };
+  // The open story: which bird, its chunks, the one showing, and whether it is read aloud.
+  const tale = { species: null, chunks: [], index: 0, seconds: 8, reading: false, timer: 0, voice: null };
+  const named = (species) => "species=" + encodeURIComponent(species);
+
   addEventListener("click", async (event) => {
-    if (collage.hidden) return;
+    if (collage.hidden || detail.classList.contains("open")) return;
     const box = collage.getBoundingClientRect();
     const x = (event.clientX - box.left) / box.width;
     const y = (event.clientY - box.top) / box.height;
     if (x < 0 || x > 1 || y < 0 || y > 1) return;
     try {
       const bird = await (await fetch(`/bird?x=${x}&y=${y}`, {cache: "no-store"})).json();
+      if (bird.story) { open(bird); return; }
       const again = bird.species === playing;
       call.pause();
       playing = null;
@@ -98,6 +143,93 @@
       await call.play();
     } catch (e) { playing = null; }
   });
+
+  function open(bird) {
+    close();
+    Object.assign(tale, { species: bird.species, chunks: [], index: 0 });
+    plate.src = "/story/plate?" + named(bird.species);
+    $("title").textContent = $("sci").textContent = "";
+    chunk.innerHTML = '<span class="dots"></span>';
+    bar.style.transition = "none";
+    bar.style.width = "0";
+    read.hidden = true;
+    detail.classList.add("open");
+    if (bird.clip) { call.src = bird.clip; call.play().catch(() => {}); }
+    load(bird.species);
+  }
+
+  async function load(species) {
+    let told;
+    try {
+      told = await (await fetch("/story?" + named(species), {cache: "no-store"})).json();
+    } catch (e) { told = { state: "failed" }; }
+    if (tale.species !== species) return;  // closed, or another bird since
+    $("title").textContent = told.title || "";
+    $("sci").textContent = told.subtitle || "";
+    tale.seconds = told.seconds || 8;
+    if (told.state === "pending") { tale.timer = setTimeout(() => load(species), 2000); return; }
+    if (told.state !== "ready") { chunk.textContent = ""; run(tale.seconds * 1000, close); return; }
+    read.hidden = !told.voice;
+    tale.chunks = told.chunks;
+    step(0);
+  }
+
+  function step(n) {
+    clearTimeout(tale.timer);
+    if (n >= tale.chunks.length) { close(); return; }
+    tale.index = n;
+    chunk.classList.add("out");
+    setTimeout(() => { chunk.textContent = tale.chunks[n]; chunk.classList.remove("out"); }, 300);
+    if (tale.reading) speak(n); else run(tale.seconds * 1000, () => step(n + 1));
+  }
+
+  // The bar empties over `ms`, then `then` runs.
+  function run(ms, then) {
+    clearTimeout(tale.timer);
+    bar.style.transition = "none";
+    bar.style.width = "100%";
+    void bar.offsetWidth;  // commit the full bar before it starts to empty
+    bar.style.transition = `width ${ms}ms linear`;
+    bar.style.width = "0";
+    if (then) tale.timer = setTimeout(then, ms);
+  }
+
+  // Read chunk `n` aloud; the next follows once it is spoken, so text and voice stay together.
+  function speak(n) {
+    const url = (i) => `/story/voice?${named(tale.species)}&n=${i}`;
+    const voice = new Audio(url(n));
+    tale.voice = voice;
+    voice.onloadedmetadata = () => { if (isFinite(voice.duration)) run(voice.duration * 1000); };
+    voice.onended = () => { tale.timer = setTimeout(() => step(n + 1), 700); };
+    voice.onerror = () => { reading(false); run(tale.seconds * 1000, () => step(n + 1)); };
+    voice.play().catch(voice.onerror);
+    if (n + 1 < tale.chunks.length) fetch(url(n + 1)).catch(() => {});  // spoken while this one plays
+  }
+
+  function reading(on) {
+    tale.reading = on;
+    read.classList.toggle("on", on);
+    read.innerHTML = on ? "&#9632;" : "&#9654;";
+    if (tale.voice) { tale.voice.onended = tale.voice.onerror = null; tale.voice.pause(); tale.voice = null; }
+  }
+
+  read.addEventListener("click", () => {
+    const on = !tale.reading;
+    reading(on);
+    call.pause();
+    step(tale.index);  // the chunk showing, read from its start or timed afresh
+  });
+  plate.addEventListener("click", () => { call.currentTime = 0; call.play().catch(() => {}); });
+  $("close").addEventListener("click", close);
+  addEventListener("visibilitychange", () => { if (document.hidden) close(); });
+
+  function close() {
+    clearTimeout(tale.timer);
+    reading(false);
+    call.pause();
+    tale.species = null;
+    detail.classList.remove("open");
+  }
   let token = null;
   async function tick() {
     try {

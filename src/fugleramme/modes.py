@@ -423,6 +423,11 @@ def png_bytes(ctx: Context) -> bytes:
     return _page(ctx)[0]
 
 
+def bird_names(ctx: Context) -> tuple[str, ...]:
+    """The species drawn on the page."""
+    return _page(ctx)[1].names
+
+
 def bird_at(ctx: Context, x: float, y: float) -> str | None:
     """The species drawn at (x, y) on the page, as fractions of its width and height."""
     return _page(ctx)[1].at(x, y)

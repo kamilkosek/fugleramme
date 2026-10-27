@@ -495,6 +495,9 @@ def test_every_route_is_either_the_kiosk_or_behind_the_password(tmp_path, source
         "/state",
         "/bird",
         "/clip",
+        "/story",
+        "/story/voice",
+        "/story/plate",
         "/paper.png",
         "/health",
     }
@@ -914,7 +917,8 @@ def test_a_tap_on_the_kiosk_finds_the_bird_and_its_clip(frame):
 
 def test_a_tap_on_paper_or_a_bad_query_plays_nothing(frame):
     _fetch(frame + "/collage.png")
-    assert json.loads(_fetch(frame + "/bird?x=2&y=2")[2]) == {"species": None, "clip": None}
+    nothing = {"species": None, "clip": None, "story": False}
+    assert json.loads(_fetch(frame + "/bird?x=2&y=2")[2]) == nothing
     assert _fetch(frame + "/bird?x=left")[0] == 400
     assert _fetch(frame + "/clip?id=nope")[0] == 404
     assert _fetch(frame + "/clip?id=999999")[0] == 404
