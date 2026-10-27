@@ -498,6 +498,8 @@ def make_handler(
             language, name_of = self._told(ctx)
             state = stories.state(name, language, name_of)
             told = stories.get(name, language)
+            if state != "pending":  # the kiosk asks again every 2 s while it is
+                log.info("Opened the %s story of %s: %s", language, name, state)
             parts = ctx.namer.parts(name)
             body = {
                 "species": name,

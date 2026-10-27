@@ -200,7 +200,15 @@ class Stories:
         partial = path.with_suffix(".part")
         partial.write_text(json.dumps(asdict(story), ensure_ascii=False, indent=1))
         partial.replace(path)
-        shutil.rmtree(self._voices(story.species, story.language), ignore_errors=True)
+        voices = self._voices(story.species, story.language)
+        if recordings := len(list(voices.rglob("*.mp3"))):
+            log.info(
+                "Dropped %d recordings of the old %s story of %s",
+                recordings,
+                story.language,
+                story.species,
+            )
+        shutil.rmtree(voices, ignore_errors=True)
 
     # -- state -----------------------------------------------------------------
 
@@ -243,6 +251,7 @@ class Stories:
                 self._failed.pop(key, None)
                 self._pending.add(key)
                 self._queue.put((name, language, name_of(name)))
+                log.info("Queued the %s story of %s%s", language, name, " (redo)" if redo else "")
             if self._worker is None and self._pending:
                 self._worker = threading.Thread(target=self._work, name="stories", daemon=True)
                 self._worker.start()
@@ -250,11 +259,26 @@ class Stories:
     def _work(self) -> None:
         while True:
             name, language, common = self._queue.get()
+            started = time.monotonic()
             try:
-                self._save(self.write(name, language, common))
-                log.info("Wrote the %s story of %s", language, name)
+                told = self.write(name, language, common)
+                self._save(told)
+                log.info(
+                    "Wrote the %s story of %s with %s: %d chunks in %.1f s",
+                    language,
+                    name,
+                    self.config.model,
+                    len(told.chunks),
+                    time.monotonic() - started,
+                )
             except (Unavailable, ValueError) as error:
-                log.warning("No %s story of %s: %s", language, name, error)
+                log.warning(
+                    "No %s story of %s: %s (not asked again for %d min)",
+                    language,
+                    name,
+                    error,
+                    _RETRY // 60,
+                )
                 with self._lock:
                     self._failed[(name, language)] = (time.monotonic(), str(error))
             finally:
@@ -335,16 +359,28 @@ class Stories:
             return None
         config = self.config
         path = self._voices(species, language) / config.speaker / f"{index}.mp3"
+        where = f"chunk {index + 1}/{len(story.chunks)} of the {language} story of {species}"
         with self._voice_lock:
             if path.exists():
+                log.info("Read %s from disk (%s)", where, config.speaker)
                 return path.read_bytes()
+            started = time.monotonic()
+            text = story.chunks[index]
             audio = _post(
                 f"{ELEVENLABS}/text-to-speech/{quote(config.voice_id)}?output_format=mp3_44100_128",
                 {"xi-api-key": config.voice_key, "Accept": "audio/mpeg"},
-                {"text": story.chunks[index], "model_id": config.voice_model},
+                {"text": text, "model_id": config.voice_model},
             )
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(audio)
+            log.info(
+                "Spoke %s with ElevenLabs (%s): %d characters, %d kB in %.1f s",
+                where,
+                config.speaker,
+                len(text),
+                len(audio) // 1024,
+                time.monotonic() - started,
+            )
             return audio
 
     def listing(
