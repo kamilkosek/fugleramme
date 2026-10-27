@@ -45,7 +45,7 @@ Covers the `web/` package.
 ## A tap opens the bird's story (`story.py`, `/story*`, `/stories`)
 
 - With stories set up (`story.Config.writes`), `/bird` says so and the kiosk opens the detail view instead of only playing the call. Without, the tap is the bare call as above.
-- A story is written once per species and language and kept as JSON under `<data>/stories/<language>/`, its spoken chunks as MP3 beside it, one folder per voice and speech model (`Config.speaker`, also in the voice URL so the browser's cache follows). A redo rewrites the JSON and drops the MP3s, so a chunk is never read in an old wording.
+- A story is written once per species and language and kept as JSON under `<data>/stories/<language>/`, its spoken chunks as MP3 beside it, one folder per voice and speech model (`Config.speaker`, also in the voice URL so the browser's cache follows). A redo rewrites the JSON, drops the MP3s so a chunk is never read in an old wording, and speaks the new ones at once; a first story is only spoken when someone presses play.
 - Every story route reads `species` through `_heard`: only a bird in the life list is written, spoken or pictured, so an open kiosk cannot spend the key on any name a stranger sends.
 - `_page_png` queues the page's birds, so a story is usually ready before the first tap. One worker thread writes them in turn; a failure is held for `story._RETRY` so a broken key is not asked once per poll.
 - A failed voice is ElevenLabs', not the detector's: `_story_voice` answers 502 itself rather than raising `Unavailable`, which would log the detector as gone. The kiosk then drops back to its timer.

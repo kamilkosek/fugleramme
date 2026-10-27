@@ -28,7 +28,7 @@
   // Every species the station has heard, with its story. Redo asks the model
   // again; the kiosk shows the new text once it is written.
   const list = document.getElementById("list");
-  const states = { ready: "", pending: "Writing...", missing: "Not written yet" };
+  const states = { ready: "", pending: "In progress...", missing: "Not written yet" };
 
   async function refresh() {
     const data = await (await fetch("/stories.json", {cache: "no-store"})).json();

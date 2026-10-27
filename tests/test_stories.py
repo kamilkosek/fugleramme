@@ -110,6 +110,18 @@ def test_a_story_is_written_once_and_redone_only_when_asked(tmp_path, source, ai
     _until(lambda: len(asked) == 2 and stories.state(BLACKBIRD, "de") == "ready")
 
 
+def test_a_redo_is_read_aloud_at_once(tmp_path, source, ai):
+    url, _asked, spoken, _answer = ai
+    stories = Stories(tmp_path, source(count=40, seed=0), _config(url))
+    stories.prepare([BLACKBIRD], "de")
+    _until(lambda: stories.get(BLACKBIRD, "de"))
+    assert spoken == []  # a first story waits for someone to press play
+
+    stories.prepare([BLACKBIRD], "de", redo=True)
+    _until(lambda: len(spoken) == len(CHUNKS))
+    assert spoken == CHUNKS
+
+
 def test_a_failed_story_says_why_and_is_not_asked_again_at_once(tmp_path, source, ai):
     url, asked, _spoken, answer = ai
     answer["status"] = 401

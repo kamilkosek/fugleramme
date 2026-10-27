@@ -174,7 +174,7 @@ class Stories:
         self._source = source
         self._lock = threading.Lock()
         self._voice_lock = threading.Lock()
-        self._queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
+        self._queue: queue.Queue[tuple[str, str, str, bool]] = queue.Queue()
         self._pending: set[tuple[str, str]] = set()
         self._failed: dict[tuple[str, str], tuple[float, str]] = {}
         self._worker: threading.Thread | None = None
@@ -250,7 +250,7 @@ class Stories:
                     continue
                 self._failed.pop(key, None)
                 self._pending.add(key)
-                self._queue.put((name, language, name_of(name)))
+                self._queue.put((name, language, name_of(name), redo))
                 log.info("Queued the %s story of %s%s", language, name, " (redo)" if redo else "")
             if self._worker is None and self._pending:
                 self._worker = threading.Thread(target=self._work, name="stories", daemon=True)
@@ -258,7 +258,7 @@ class Stories:
 
     def _work(self) -> None:
         while True:
-            name, language, common = self._queue.get()
+            name, language, common, redo = self._queue.get()
             started = time.monotonic()
             try:
                 told = self.write(name, language, common)
@@ -271,6 +271,8 @@ class Stories:
                     len(told.chunks),
                     time.monotonic() - started,
                 )
+                if redo:
+                    self._speak(told)
             except (Unavailable, ValueError) as error:
                 log.warning(
                     "No %s story of %s: %s (not asked again for %d min)",
@@ -284,6 +286,19 @@ class Stories:
             finally:
                 with self._lock:
                     self._pending.discard((name, language))
+
+    def _speak(self, story: Story) -> None:
+        """Read a redone story aloud at once, so whoever asked for it in the
+        admin hears the new wording without waiting on the first press of play."""
+        if not self.config.speaks:
+            return
+        try:
+            for index in range(len(story.chunks)):
+                self.voice(story.species, story.language, index)
+        except Unavailable as error:
+            log.warning(
+                "Reading the %s story of %s aloud failed: %s", story.language, story.species, error
+            )
 
     # -- writing ---------------------------------------------------------------
 
@@ -395,7 +410,7 @@ class Stories:
                 {
                     "species": name,
                     "name": name_of(name),
-                    "state": "ready" if story else "pending" if pending else "missing",
+                    "state": "pending" if pending else "ready" if story else "missing",
                     "chunks": list(story.chunks) if story else [],
                     "written_at": story.written_at if story else "",
                     "failure": self.failure(name, language),

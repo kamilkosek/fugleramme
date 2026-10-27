@@ -41,8 +41,8 @@ they appear on it, so the first tap need not wait.
 
 **Stories** in the admin's menu (`/stories`) lists every bird the station has
 heard with its text. **Redo** asks the model again; the kiosk shows the new text
-once it is written. Its spoken chunks are made again too, the next time someone
-presses play.
+once it is written. With reading aloud set up, the new text is spoken straight
+away too, so the first press of play does not wait on ElevenLabs.
 
 A new `ELEVENLABS_VOICE_ID` or `ELEVENLABS_MODEL` takes over after a restart:
 every chunk is spoken again in it, and the old voice's recordings are kept, so
